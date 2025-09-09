@@ -9,7 +9,6 @@ client_example
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
 data/
 logs/
 *.log
@@ -17,3 +16,4 @@ logs/
 .vscode/
 *.tmp
 *~
+install/

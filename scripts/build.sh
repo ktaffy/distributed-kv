@@ -67,7 +67,6 @@ mkdir -p logs
 
 # Set permissions for scripts
 chmod +x scripts/*.sh
-chmod +x scripts/*.py
 
 echo -e "${GREEN}Build completed successfully!${NC}"
 echo -e "${YELLOW}Executables:${NC}"

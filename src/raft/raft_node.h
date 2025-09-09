@@ -43,6 +43,8 @@ namespace raft
         // Raft RPC handlers
         void handle_request_vote(const RequestVoteRPC &request, RequestVoteResponse &response);
         void handle_append_entries(const AppendEntriesRPC &request, AppendEntriesResponse &response);
+        void handle_connection_change(uint32_t node_id, bool connected);
+        void handle_message(std::unique_ptr<Message> message);
 
         size_t get_log_size() const;
         const LogEntry &get_log_entry(size_t index) const;

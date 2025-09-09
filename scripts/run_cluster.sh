@@ -11,7 +11,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARY_PATH="$PROJECT_ROOT/distributed_kv"
-CONFIG_DIR="$PROJECT_ROOT/config"
+CONFIG_DIR="$PROJECT_ROOT/src/config"
 DATA_DIR="$PROJECT_ROOT/data"
 LOGS_DIR="$PROJECT_ROOT/logs"
 

@@ -96,8 +96,6 @@ install(TARGETS distributed_kv RUNTIME DESTINATION bin)
 install(TARGETS kvstore_client ARCHIVE DESTINATION lib)
 install(DIRECTORY src/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 
-# Configuration files
-install(DIRECTORY config/ DESTINATION etc/distributed-kv)
 
 # Scripts
 install(PROGRAMS 

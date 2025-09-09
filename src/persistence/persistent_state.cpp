@@ -62,10 +62,6 @@ namespace raft
 
     bool PersistentState::save()
     {
-        if (!initialized_.load())
-        {
-            return false;
-        }
 
         if (!create_backup())
         {
