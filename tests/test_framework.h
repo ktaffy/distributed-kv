@@ -45,6 +45,8 @@ namespace kvtest {
         int failed = 0;
         for (const auto &t : registry()) {
             current_failures() = 0;
+            std::printf("[ RUN] %s\n", t.name);
+            std::fflush(stdout);
             try {
                 t.fn();
             } catch (const std::exception &e) {
@@ -55,6 +57,7 @@ namespace kvtest {
 
             bool ok = current_failures() == 0;
             std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", t.name);
+            std::fflush(stdout);
             if (!ok)
                 ++failed;
         }

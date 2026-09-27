@@ -43,7 +43,6 @@ namespace raft
         listen_thread_ = std::thread(&NetworkManager::listen_thread, this);
         connection_manager_thread_ = std::thread(&NetworkManager::connection_manager_thread, this);
         message_processor_thread_ = std::thread(&NetworkManager::message_processor_thread, this);
-        heartbeat_thread_ = std::thread(&NetworkManager::heartbeat_thread, this);
         request_timeout_thread_ = std::thread(&NetworkManager::request_timeout_thread, this);
 
         return true;
@@ -91,8 +90,7 @@ namespace raft
 
         if (message_processor_thread_.joinable())
             message_processor_thread_.join();
-        if (heartbeat_thread_.joinable())
-            heartbeat_thread_.join();
+
         if (request_timeout_thread_.joinable())
             request_timeout_thread_.join();
 
@@ -393,7 +391,7 @@ namespace raft
                     if (!peer.connection || !peer.connection->connected.load())
                     {
                         auto now = std::chrono::steady_clock::now();
-                        if (now - peer.last_attempt > std::chrono::seconds(1))
+                        if (now - peer.last_attempt > std::chrono::milliseconds(100))
                         {
                             if (connect_to_peer(peer))
                             {
@@ -416,7 +414,7 @@ namespace raft
                 }
             }
 
-            wait_while_running(std::chrono::milliseconds(1000));
+            wait_while_running(std::chrono::milliseconds(100));
         }
     }
 
@@ -438,26 +436,6 @@ namespace raft
 
                 lock.lock();
             }
-        }
-    }
-
-    void NetworkManager::heartbeat_thread()
-    {
-        while (running_.load())
-        {
-            {
-                std::lock_guard<std::mutex> lock(connections_mutex_);
-                for (const auto &pair : node_connections_)
-                {
-                    if (pair.second->connected.load())
-                    {
-                        auto heartbeat = std::make_unique<HeartbeatMessage>(node_id_, pair.first);
-                        send_message(pair.first, std::move(heartbeat));
-                    }
-                }
-            }
-
-            wait_while_running(heartbeat_interval_);
         }
     }
 
@@ -718,12 +696,12 @@ namespace raft
     void NetworkManager::set_socket_options(int socket_fd)
     {
         int reuse = 1;
+        setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
         timeval timeout;
         timeout.tv_sec = send_timeout_.count() / 1000;
         timeout.tv_usec = (send_timeout_.count() % 1000) * 1000;
         setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-        setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     }
 
 } // namespace raft

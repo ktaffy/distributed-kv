@@ -145,19 +145,21 @@ namespace raft
         Writer w;
         write_header(w, *this);
         w.u8(success ? 1 : 0);
+        w.u8(found ? 1 : 0);
         w.str(value);
         w.str(error_message);
         w.u32(leader_hint);
+        w.str(leader_address);
         return w.take();
     }
 
     bool ClientResponse::deserialize(const std::string &data)
     {
         Reader r(data);
-        return read_header(r, *this) && read_bool(r, success) && r.str(value) &&
-               r.str(error_message) && r.u32(leader_hint) && r.done();
+        return read_header(r, *this) && read_bool(r, success) && read_bool(r, found) &&
+            r.str(value) && r.str(error_message) && r.u32(leader_hint) &&
+            r.str(leader_address) && r.done();
     }
-
     std::string HeartbeatMessage::serialize() const
     {
         Writer w;

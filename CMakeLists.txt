@@ -50,6 +50,7 @@ set(UTILS_SOURCES
 # Main executable
 add_executable(distributed_kv
     src/main.cpp
+    src/server/client_server.cpp
     ${RAFT_SOURCES}
     ${KVSTORE_SOURCES}
     ${NETWORK_SOURCES}
@@ -64,6 +65,8 @@ target_link_libraries(distributed_kv
 
 # Client library (for examples and external usage)
 add_library(kvstore_client STATIC
+    src/client/kv_client.cpp
+    src/raft/log_entry.cpp
     ${KVSTORE_SOURCES}
     ${NETWORK_SOURCES}
     ${UTILS_SOURCES}

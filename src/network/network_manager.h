@@ -105,7 +105,6 @@ namespace raft
         void listen_thread();
         void connection_manager_thread();
         void message_processor_thread();
-        void heartbeat_thread();
         void request_timeout_thread();
 
         void handle_new_connection(int client_socket, const std::string &client_addr);
@@ -170,7 +169,6 @@ namespace raft
         std::thread listen_thread_;
         std::thread connection_manager_thread_;
         std::thread message_processor_thread_;
-        std::thread heartbeat_thread_;
         std::thread request_timeout_thread_;
 
         NetworkStats stats_;

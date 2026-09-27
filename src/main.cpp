@@ -10,24 +10,17 @@
 #include "raft/raft_node.h"
 #include "utils/config.h"
 #include "utils/logger.h"
+#include "server/client_server.h"
 
 using namespace raft;
 
 std::unique_ptr<RaftNode> g_node;
 std::shared_ptr<Logger> g_logger;
-volatile bool g_shutdown = false;
+volatile sig_atomic_t g_shutdown = 0;
 
-void signal_handler(int signal)
+void signal_handler(int)
 {
-    if (signal == SIGINT || signal == SIGTERM)
-    {
-        g_logger->info("Received shutdown signal");
-        g_shutdown = true;
-        if (g_node)
-        {
-            g_node->stop();
-        }
-    }
+    g_shutdown = 1;
 }
 
 void print_usage(const char *program_name)
@@ -175,31 +168,31 @@ void run_node(const Config &config)
     try
     {
         g_node = std::make_unique<RaftNode>(config.get_node_id(), config);
-
-        g_logger->info("Starting Raft node...");
         g_node->start();
 
-        g_logger->info("Node started successfully");
+        ClientServer server(*g_node, config);
+        uint16_t client_port = client_port_for(config.get_listen_port());
+        if (!server.start(client_port))
+            throw std::runtime_error("Failed to start client server on port " + std::to_string(client_port));
 
+        g_logger->info("Raft on port {}, clients on port {}", config.get_listen_port(), client_port);
+
+        auto last_leader_log = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         while (!g_shutdown && g_node->is_running())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-            if (g_node->is_leader())
+            auto now = std::chrono::steady_clock::now();
+            if (g_node->is_leader() && now - last_leader_log > std::chrono::seconds(10))
             {
-                static auto last_leader_log = std::chrono::steady_clock::now();
-                auto now = std::chrono::steady_clock::now();
-                if (now - last_leader_log > std::chrono::seconds(10))
-                {
-                    g_logger->info("Node {} is LEADER (term: {})",
-                                   config.get_node_id(), g_node->get_current_term());
-                    last_leader_log = now;
-                }
+                g_logger->info("Node {} is LEADER (term: {})", config.get_node_id(), g_node->get_current_term());
+                last_leader_log = now;
             }
         }
 
         g_logger->info("Stopping node...");
         g_node->stop();
+        server.stop();
         g_logger->info("Node stopped");
     }
     catch (const std::exception &e)

@@ -127,13 +127,15 @@ namespace raft
     struct ClientResponse : public Message
     {
         bool success;
+        bool found;
         std::string value;
         std::string error_message;
         uint32_t leader_hint;
+        std::string leader_address;
 
         ClientResponse(uint32_t src = 0, uint32_t dst = 0)
             : Message(MessageType::CLIENT_RESPONSE, src, dst),
-              success(false), leader_hint(0) {}
+            success(false), found(false), leader_hint(0) {}
 
         std::string serialize() const override;
         bool deserialize(const std::string &data) override;
