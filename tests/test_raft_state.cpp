@@ -24,45 +24,45 @@ TEST(majority_is_floor_half_plus_one)
     CHECK_EQ(five.get_majority_size(), 3u);
 }
 
-// TEST(self_vote_alone_is_not_a_majority)
-// {
-//     RaftState state(1);
-//     state.set_cluster_nodes({1, 2, 3});
-//     state.reset_election_state();
-//     CHECK_EQ(state.get_vote_count(), 1u);
-//     CHECK(!state.has_majority_votes());
-// }
+TEST(self_vote_alone_is_not_a_majority)
+{
+    RaftState state(1);
+    state.set_cluster_nodes({1, 2, 3});
+    state.reset_election_state();
+    CHECK_EQ(state.get_vote_count(), 1u);
+    CHECK(!state.has_majority_votes());
+}
 
-// TEST(one_granted_peer_vote_wins_three_node_election)
-// {
-//     RaftState state(1);
-//     state.set_cluster_nodes({1, 2, 3});
-//     state.reset_election_state();
-//     state.record_vote(2, true);
-//     CHECK(state.has_majority_votes());
-// }
+TEST(one_granted_peer_vote_wins_three_node_election)
+{
+    RaftState state(1);
+    state.set_cluster_nodes({1, 2, 3});
+    state.reset_election_state();
+    state.record_vote(2, true);
+    CHECK(state.has_majority_votes());
+}
 
-// TEST(denied_votes_do_not_count)
-// {
-//     RaftState state(1);
-//     state.set_cluster_nodes({1, 2, 3});
-//     state.reset_election_state();
-//     state.record_vote(2, false);
-//     state.record_vote(3, false);
-//     CHECK_EQ(state.get_vote_count(), 1u);
-//     CHECK(!state.has_majority_votes());
-// }
+TEST(denied_votes_do_not_count)
+{
+    RaftState state(1);
+    state.set_cluster_nodes({1, 2, 3});
+    state.reset_election_state();
+    state.record_vote(2, false);
+    state.record_vote(3, false);
+    CHECK_EQ(state.get_vote_count(), 1u);
+    CHECK(!state.has_majority_votes());
+}
 
-// TEST(duplicate_vote_from_same_peer_counts_once)
-// {
-//     RaftState state(1);
-//     state.set_cluster_nodes({1, 2, 3, 4, 5});
-//     state.reset_election_state();
-//     state.record_vote(2, true);
-//     state.record_vote(2, true);
-//     CHECK_EQ(state.get_vote_count(), 2u);
-//     CHECK(!state.has_majority_votes());
-// }
+TEST(duplicate_vote_from_same_peer_counts_once)
+{
+    RaftState state(1);
+    state.set_cluster_nodes({1, 2, 3, 4, 5});
+    state.reset_election_state();
+    state.record_vote(2, true);
+    state.record_vote(2, true);
+    CHECK_EQ(state.get_vote_count(), 2u);
+    CHECK(!state.has_majority_votes());
+}
 
 TEST(leader_state_starts_after_last_log_index)
 {

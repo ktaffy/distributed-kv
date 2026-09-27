@@ -162,7 +162,7 @@ namespace raft
             }
         }
 
-        return positive_votes >= get_majority_size();
+        return positive_votes >= (cluster_nodes_.size() / 2) + 1;
     }
 
     size_t RaftState::get_vote_count() const
