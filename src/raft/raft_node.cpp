@@ -220,56 +220,50 @@ namespace raft
         return state_->get_state();
     }
 
-    bool RaftNode::client_request(const std::string &operation, const std::string &key,
-                                  const std::string &value, std::string &response)
+    RaftNode::ClientResult RaftNode::submit(const KVOperation &op, std::chrono::milliseconds timeout)
     {
-        if (!is_leader())
+        ClientResult result;
+        std::unique_lock<std::mutex> lock(state_mutex_);
+
+        if (!running_.load() || !state_->is_leader())
         {
-            response = "Not leader, redirect to node " + std::to_string(get_leader_id());
-            return false;
+            result.error = "not leader";
+            result.leader_hint = state_->get_leader_id();
+            return result;
         }
 
-        // Create KV operation
-        KVOperation::Type op_type;
-        if (operation == "GET")
-            op_type = KVOperation::Type::GET;
-        else if (operation == "PUT")
-            op_type = KVOperation::Type::PUT;
-        else if (operation == "DELETE")
-            op_type = KVOperation::Type::DELETE;
-        else
+        uint32_t term = state_->get_current_term();
+        uint32_t index = log_storage_->get_last_index() + 1;
+        if (!log_storage_->append_entry(op.to_log_entry(term, index)))
         {
-            response = "Invalid operation: " + operation;
-            return false;
+            result.error = "append failed";
+            return result;
         }
 
-        KVOperation kv_op(op_type, key, value);
-
-        uint32_t next_index = log_storage_->get_last_index() + 1;
-        LogEntry entry = kv_op.to_log_entry(state_->get_current_term(), next_index);
-
-        if (!log_storage_->append_entry(entry))
-        {
-            response = "Failed to append to log";
-            return false;
-        }
-
-        logger_->debug("Appended log entry {} for {} {}", next_index, operation, key);
-
-        // For GET operations, we can respond immediately from local state
-        if (op_type == KVOperation::Type::GET)
-        {
-            // In a real implementation, you'd query the state machine here
-            response = "GET operation processed"; // Placeholder
-            return true;
-        }
-
-        // For PUT/DELETE, we need to replicate to majority
-        // This is a simplified implementation - in practice you'd wait for replication
+        waiters_[index];
+        advance_commit_index();
         send_append_entries();
+        send_outbox(lock);
 
-        response = "Operation replicated";
-        return true;
+        state_cv_.wait_for(lock, timeout, [&] {
+            return waiters_[index].has_value() || !running_.load() ||
+                !state_->is_leader() || state_->get_current_term() != term;
+        });
+
+        std::optional<ApplyResult> applied = std::move(waiters_[index]);
+        waiters_.erase(index);
+
+        if (!applied || applied->term != term)
+        {
+            result.error = applied ? "leadership lost" : "timeout";
+            result.leader_hint = state_->get_leader_id();
+            return result;
+        }
+
+        result.ok = true;
+        result.found = applied->found;
+        result.value = std::move(applied->value);
+        return result;
     }
 
     void RaftNode::handle_request_vote(const RequestVoteRPC &request, RequestVoteResponse &response)
@@ -409,6 +403,7 @@ namespace raft
         }
 
         reset_election_timeout();
+        state_cv_.notify_all();
     }
 
     void RaftNode::become_candidate()
@@ -441,6 +436,7 @@ namespace raft
         uint32_t last_index = log_storage_->get_last_index();
         state_->initialize_leader_state(last_index);
         log_storage_->append_entry(log_utils::create_no_op_entry(state_->get_current_term(), last_index + 1));
+        advance_commit_index();
 
         send_append_entries();
     }
@@ -632,22 +628,30 @@ namespace raft
 
     void RaftNode::apply_committed_entries()
     {
-        uint32_t last_applied = state_->get_last_applied();
         uint32_t commit_index = state_->get_commit_index();
+        bool notify = false;
 
-        for (uint32_t i = last_applied + 1; i <= commit_index; ++i)
+        for (uint32_t i = state_->get_last_applied() + 1; i <= commit_index; ++i)
         {
             LogEntry entry = log_storage_->get_entry(i);
+            ApplyResult result;
+            result.term = entry.term;
 
-            if (entry.type == LogEntryType::CLIENT_COMMAND)
-            {
-                KVOperation op = KVOperation::from_log_entry(entry);
-                logger_->debug("Applied entry {} - {} {}", i,
-                               KVOperation::type_to_string(op.operation), op.key);
-            }
+            if (entry.is_client_command())
+                result.found = state_machine_.apply(KVOperation::from_log_entry(entry), result.value);
 
             state_->set_last_applied(i);
+
+            auto it = waiters_.find(i);
+            if (it != waiters_.end())
+            {
+                it->second = std::move(result);
+                notify = true;
+            }
         }
+
+        if (notify)
+            state_cv_.notify_all();
     }
 
     void RaftNode::handle_message(std::unique_ptr<Message> message)

@@ -341,3 +341,90 @@ TEST(three_node_cluster_elects_one_leader)
         n->stop();
 }
 
+template <typename Pred>
+static bool eventually(Pred pred, int timeout_ms = 3000)
+{
+    for (int waited = 0; waited < timeout_ms; waited += 10)
+    {
+        if (pred())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+}
+
+TEST(single_node_applies_put_get_delete)
+{
+    TempDir dir;
+    auto config = make_config(1, dir.path, 1);
+    config.set_listen_port(0);
+    RaftNode node(1, config);
+    node.start();
+    CHECK(eventually([&] { return node.is_leader(); }));
+
+    auto put = node.submit(KVOperation(KVOperation::Type::PUT, "k", "v"), std::chrono::seconds(1));
+    CHECK(put.ok);
+
+    auto get = node.submit(KVOperation(KVOperation::Type::GET, "k"), std::chrono::seconds(1));
+    CHECK(get.ok);
+    CHECK(get.found);
+    CHECK_EQ(get.value, std::string("v"));
+
+    auto del = node.submit(KVOperation(KVOperation::Type::DELETE, "k"), std::chrono::seconds(1));
+    CHECK(del.ok);
+    CHECK(del.found);
+
+    auto missing = node.submit(KVOperation(KVOperation::Type::GET, "k"), std::chrono::seconds(1));
+    CHECK(missing.ok);
+    CHECK(!missing.found);
+
+    node.stop();
+}
+
+TEST(cluster_replicates_committed_writes)
+{
+    TempDir d1, d2, d3;
+    auto ports = kvtest::free_ports(3);
+    RaftNode n1(1, make_config(1, d1.path, ports));
+    RaftNode n2(2, make_config(2, d2.path, ports));
+    RaftNode n3(3, make_config(3, d3.path, ports));
+    std::vector<RaftNode *> nodes{&n1, &n2, &n3};
+
+    for (auto *n : nodes)
+        n->start();
+
+    RaftNode *leader = nullptr;
+    CHECK(eventually([&] {
+        for (auto *n : nodes)
+            if (n->is_leader())
+                leader = n;
+        return leader != nullptr;
+    }));
+    if (!leader)
+        return;
+
+    auto put = leader->submit(KVOperation(KVOperation::Type::PUT, "k", "v"), std::chrono::seconds(2));
+    CHECK(put.ok);
+
+    for (auto *n : nodes)
+    {
+        RaftNodeTestPeer peer(*n);
+        CHECK(eventually([&] {
+            std::string value;
+            return peer.sm_get("k", value) && value == "v";
+        }));
+    }
+
+    for (auto *n : nodes)
+    {
+        if (n == leader)
+            continue;
+        auto rejected = n->submit(KVOperation(KVOperation::Type::PUT, "x", "y"), std::chrono::seconds(1));
+        CHECK(!rejected.ok);
+        CHECK_EQ(rejected.leader_hint, leader->get_leader_id());
+    }
+
+    for (auto *n : nodes)
+        n->stop();
+}
+

@@ -34,6 +34,12 @@ namespace raft
             node_.become_follower(term);
         }
 
+        bool sm_get(const std::string &key, std::string &value)
+        {
+            std::lock_guard<std::mutex> lock(node_.state_mutex_);
+            return node_.state_machine_.get(key, value);
+        }
+
         void process_vote_response(const RequestVoteResponse &resp)
         {
             node_.process_vote_response(resp);

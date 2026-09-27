@@ -9,7 +9,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
+#include "../kvstore/state_machine.h"
 #include "raft_state.h"
 #include "log_entry.h"
 #include "../network/network_manager.h"
@@ -26,6 +28,16 @@ namespace raft
     {
     friend class RaftNodeTestPeer;
     public:
+        struct ClientResult
+        {
+            bool ok = false;
+            bool found = false;
+            std::string value;
+            std::string error;
+            int leader_hint = 0;
+        };
+        
+        ClientResult submit(const KVOperation &op, std::chrono::milliseconds timeout);
         RaftNode(int node_id, const Config &config);
         ~RaftNode();
 
@@ -38,9 +50,6 @@ namespace raft
         int get_leader_id() const;
         NodeState get_state() const;
 
-        bool client_request(const std::string &operation, const std::string &key,
-                            const std::string &value, std::string &response);
-
         // Raft RPC handlers
         void handle_request_vote(const RequestVoteRPC &request, RequestVoteResponse &response);
         void handle_append_entries(const AppendEntriesRPC &request, AppendEntriesResponse &response);
@@ -51,6 +60,15 @@ namespace raft
         const LogEntry &get_log_entry(size_t index) const;
 
     private:
+        struct ApplyResult
+        {
+            uint32_t term = 0;
+            bool found = false;
+            std::string value;
+        };
+        
+        KVStateMachine state_machine_;
+        std::unordered_map<uint32_t, std::optional<ApplyResult>> waiters_;
         void flush_outbox();
         void send_outbox(std::unique_lock<std::mutex> &lock);
 
