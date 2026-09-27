@@ -65,7 +65,6 @@ namespace raft
 
         void election_timer_thread();
         void heartbeat_timer_thread();
-        void message_processor_thread();
 
         int generate_election_timeout();
         void reset_election_timeout();
@@ -89,7 +88,6 @@ namespace raft
 
         std::thread election_timer_thread_;
         std::thread heartbeat_timer_thread_;
-        std::thread message_processor_thread_;
 
         std::atomic<std::chrono::steady_clock::time_point> last_heartbeat_;
         std::atomic<int> election_timeout_ms_;

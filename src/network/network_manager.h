@@ -127,6 +127,11 @@ namespace raft
         int create_client_socket();
         void set_socket_options(int socket_fd);
 
+        bool wait_while_running(std::chrono::milliseconds duration);
+
+        std::mutex stop_mutex_;
+        std::condition_variable stop_cv_;
+
         const uint32_t node_id_;
         const std::string listen_address_;
         const uint16_t listen_port_;

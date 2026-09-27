@@ -72,44 +72,39 @@ namespace raft
 
     void RaftNode::start()
     {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-
-        if (running_.load())
-        {
+        if (running_.exchange(true))
             return;
-        }
 
         logger_->info("Starting Raft node {}", node_id_);
 
         if (!network_manager_->start())
         {
+            running_.store(false);
             throw std::runtime_error("Failed to start network manager");
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-
-        running_.store(true);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            reset_election_timeout();
+        }
 
         election_timer_thread_ = std::thread(&RaftNode::election_timer_thread, this);
         heartbeat_timer_thread_ = std::thread(&RaftNode::heartbeat_timer_thread, this);
-        message_processor_thread_ = std::thread(&RaftNode::message_processor_thread, this);
 
-        become_follower(state_->get_current_term());
-
-        logger_->info("Raft node {} started successfully", node_id_);
+        logger_->info("Raft node {} started", node_id_);
     }
 
     void RaftNode::stop()
     {
-        if (!running_.load())
         {
-            return;
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!running_.load())
+                return;
+            running_.store(false);
         }
+        state_cv_.notify_all();
 
         logger_->info("Stopping Raft node {}", node_id_);
-
-        running_.store(false);
-        state_cv_.notify_all();
 
         network_manager_->stop();
 
@@ -117,13 +112,62 @@ namespace raft
             election_timer_thread_.join();
         if (heartbeat_timer_thread_.joinable())
             heartbeat_timer_thread_.join();
-        if (message_processor_thread_.joinable())
-            message_processor_thread_.join();
 
         persistent_state_->sync();
         log_storage_->sync();
 
         logger_->info("Raft node {} stopped", node_id_);
+    }
+
+    void RaftNode::start_election()
+    {
+        for (int peer_id : peer_nodes_)
+        {
+            auto request = std::make_unique<RequestVoteRPC>(node_id_, peer_id);
+            request->term = state_->get_current_term();
+            request->candidate_id = node_id_;
+            request->last_log_index = log_storage_->get_last_index();
+            request->last_log_term = log_storage_->get_last_term();
+            network_manager_->send_message(peer_id, std::move(request));
+        }
+
+        if (state_->has_majority_votes())
+            become_leader();
+    }
+
+    void RaftNode::election_timer_thread()
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        while (running_.load())
+        {
+            if (state_->is_leader())
+            {
+                state_cv_.wait_for(lock, std::chrono::milliseconds(HEARTBEAT_INTERVAL_MS));
+                continue;
+            }
+
+            auto deadline = last_heartbeat_.load() + std::chrono::milliseconds(election_timeout_ms_.load());
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                become_candidate();
+                continue;
+            }
+
+            state_cv_.wait_until(lock, deadline);
+        }
+    }
+
+    void RaftNode::heartbeat_timer_thread()
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        while (running_.load())
+        {
+            if (state_->is_leader())
+                send_append_entries();
+
+            state_cv_.wait_for(lock, std::chrono::milliseconds(HEARTBEAT_INTERVAL_MS),
+                            [this] { return !running_.load(); });
+        }
     }
 
     bool RaftNode::is_leader() const
@@ -376,46 +420,6 @@ namespace raft
         send_append_entries();
     }
 
-    void RaftNode::start_election()
-    {
-        logger_->info("Starting election for term {} - peer_nodes_.size() = {}",
-                      state_->get_current_term(), peer_nodes_.size());
-
-        if (peer_nodes_.empty())
-        {
-            logger_->warn("No peers configured - cannot send RequestVote messages!");
-            return;
-        }
-
-        for (int peer_id : peer_nodes_)
-        {
-            logger_->info("Sending RequestVote to peer {}", peer_id);
-            auto request = std::make_unique<RequestVoteRPC>(node_id_, peer_id);
-            request->term = state_->get_current_term();
-            request->candidate_id = node_id_;
-            request->last_log_index = log_storage_->get_last_index();
-            request->last_log_term = log_storage_->get_last_term();
-
-            // Try sending with a small retry
-            bool sent = false;
-            for (int retry = 0; retry < 3 && !sent; retry++)
-            {
-                sent = network_manager_->send_message(peer_id, std::move(request));
-                if (!sent && retry < 2)
-                {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    // Recreate the request for retry
-                    request = std::make_unique<RequestVoteRPC>(node_id_, peer_id);
-                    request->term = state_->get_current_term();
-                    request->candidate_id = node_id_;
-                    request->last_log_index = log_storage_->get_last_index();
-                    request->last_log_term = log_storage_->get_last_term();
-                }
-            }
-            logger_->info("RequestVote send result to peer {}: {}", peer_id, sent ? "SUCCESS" : "FAILED");
-        }
-    }
-
     void RaftNode::send_append_entries()
     {
         if (!is_leader())
@@ -531,49 +535,6 @@ namespace raft
                 }
             }
             state_->set_next_index(node_id, std::max(next, 1u));
-        }
-    }
-
-    void RaftNode::election_timer_thread()
-    {
-        while (running_.load())
-        {
-            std::unique_lock<std::mutex> lock(state_mutex_);
-
-            auto timeout = std::chrono::milliseconds(election_timeout_ms_.load());
-            auto deadline = last_heartbeat_.load() + timeout;
-
-            if (state_cv_.wait_until(lock, deadline) == std::cv_status::timeout)
-            {
-                if (!is_leader() && running_.load())
-                {
-                    logger_->debug("Election timeout - starting new election");
-                    become_candidate();
-                }
-            }
-        }
-    }
-
-    void RaftNode::heartbeat_timer_thread()
-    {
-        while (running_.load())
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(HEARTBEAT_INTERVAL_MS));
-
-            if (is_leader() && running_.load())
-            {
-                send_append_entries();
-            }
-        }
-    }
-
-    void RaftNode::message_processor_thread()
-    {
-        // This would typically process messages from a queue
-        // For this implementation, messages are handled directly in callbacks
-        while (running_.load())
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 
@@ -703,7 +664,6 @@ namespace raft
         }
         case MessageType::HEARTBEAT:
         {
-            reset_election_timeout();
             break;
         }
         default:

@@ -58,6 +58,14 @@ namespace raft
 
         running_.store(false);
 
+        {
+            std::lock_guard<std::mutex> lock(stop_mutex_);
+        }
+        stop_cv_.notify_all();
+        
+        if (server_socket_ >= 0)
+            shutdown(server_socket_, SHUT_RDWR);
+
         if (server_socket_ >= 0)
         {
             close(server_socket_);
@@ -86,6 +94,13 @@ namespace raft
             heartbeat_thread_.join();
         if (request_timeout_thread_.joinable())
             request_timeout_thread_.join();
+    }
+
+    bool NetworkManager::wait_while_running(std::chrono::milliseconds duration)
+    {
+        std::unique_lock<std::mutex> lock(stop_mutex_);
+        stop_cv_.wait_for(lock, duration, [this] { return !running_.load(); });
+        return running_.load();
     }
 
     void NetworkManager::set_message_handler(MessageHandler handler)
@@ -349,7 +364,7 @@ namespace raft
                 }
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            wait_while_running(std::chrono::milliseconds(1000));
         }
     }
 
@@ -390,7 +405,7 @@ namespace raft
                 }
             }
 
-            std::this_thread::sleep_for(heartbeat_interval_);
+            wait_while_running(heartbeat_interval_);
         }
     }
 
@@ -399,7 +414,7 @@ namespace raft
         while (running_.load())
         {
             cleanup_expired_requests();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            wait_while_running(std::chrono::milliseconds(1000));
         }
     }
 

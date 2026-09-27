@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "raft_test_util.h"
 #include <vector>
+#include <chrono>
+#include <thread>
 
 using namespace raft;
 using kvtest::TempDir;
@@ -282,3 +284,24 @@ TEST(stale_success_reply_does_not_lower_match_index)
     CHECK_EQ(peer.match_index(2), 5u);
     CHECK_EQ(peer.next_index(2), 6u);
 }
+
+TEST(single_node_elects_itself_and_stops_promptly)
+{
+    TempDir dir;
+    auto config = make_config(1, dir.path, 1);
+    config.set_listen_port(0);
+    RaftNode node(1, config);
+
+    auto start = std::chrono::steady_clock::now();
+    node.start();
+
+    for (int i = 0; i < 200 && !node.is_leader(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    CHECK(node.is_leader());
+    node.stop();
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    CHECK(elapsed < std::chrono::seconds(3));
+}
+

@@ -84,7 +84,7 @@ namespace kvtest
         }
     };
 
-    inline raft::Config make_config(uint32_t self, const std::filesystem::path &data_dir)
+    inline raft::Config make_config(uint32_t self, const std::filesystem::path &data_dir, uint32_t cluster_size = 3)
     {
         raft::Config config;
         config.set_node_id(self);
@@ -92,7 +92,7 @@ namespace kvtest
         config.set_listen_port(static_cast<uint16_t>(19000 + self));
         config.set_data_directory(data_dir.string());
 
-        for (uint32_t id = 1; id <= 3; ++id)
+        for (uint32_t id = 1; id <= cluster_size; ++id)
         {
             raft::NodeConfig node;
             node.node_id = id;
