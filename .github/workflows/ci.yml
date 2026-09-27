@@ -1,0 +1,19 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+    test:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 10
+        strategy:
+            matrix:
+                build_type: [Debug, Release]
+        env:
+            CMAKE_BUILD_TYPE: ${{ matrix.build_type }}
+        steps:
+            - uses: actions/checkout@v7
+            - name: Build everything
+              run: cmake -S . -B build && cmake --build build -j
+            - name: Run tests
+              run: make test
