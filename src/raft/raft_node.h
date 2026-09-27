@@ -104,10 +104,10 @@ namespace raft
 
         std::unique_ptr<Logger> logger_;
 
-        static const int MIN_ELECTION_TIMEOUT_MS = 150;
-        static const int MAX_ELECTION_TIMEOUT_MS = 300;
-        static const int HEARTBEAT_INTERVAL_MS = 50;
-        static const int RPC_TIMEOUT_MS = 100;
+        static constexpr int MIN_ELECTION_TIMEOUT_MS = 150;
+        static constexpr int MAX_ELECTION_TIMEOUT_MS = 300;
+        static constexpr int HEARTBEAT_INTERVAL_MS = 50;
+        static constexpr int RPC_TIMEOUT_MS = 100;
     };
 
 } // namespace raft
