@@ -1,50 +1,60 @@
-# Distributed Key-Value Store
+# distributed-kv
 
-## Features
-- Raft Consensus: Complete implementation with leader election and log replication
-- Fault Tolerance: Handles node failures and network partitions
-- Consistent Hashing: Even data distribution with configurable replication
-- Persistent Storage: Crash-safe with write-ahead logging and snapshots
-- High Performance: 10,000+ operations/second with sub-ms read latency
+A strongly consistent key-value store built on Raft, in C++17 with no external libraries.
 
-## Quick Start
-### Build
-```
-git clone https://github.com/ktaffy/distributed-kv.git
-cd distributed-kv
-./scripts/build.sh
-```
-### Run Cluster
-```
-# Start 3-node cluster
-./scripts/run_cluster.sh
+## Quickstart
 
-# Test the cluster
-./scripts/test_cluster.sh
+Requires Linux, a C++17 compiler, and CMake 3.12+.
+
+```bash
+make build    # compile the server and client
+make test     # run the test suite
+make run      # start a 3-node cluster on localhost
 ```
 
-### Usage
+In another terminal:
+
+```bash
+./client_example put name messi
+./client_example get name
+./client_example delete name
 ```
-# Basic operations
-./client_example put user:123 "Alice"
-./client_example get user:123
-./client_example delete user:123
+
+The client can reach any node. Followers point it to the current leader.
+
+## Failover
+
+```bash
+grep "is LEADER" logs/*.log | tail -1   # find the leader, e.g. node2
+pkill -f node2.conf                     # kill it
+./client_example get name               # a new leader answers within about a second
 ```
 
-## Configuration
-Edit `config/node1.conf`, `config/node2.conf`, `config/node3.conf` to customize:
-- Node IDs and network addresses
-- Data directories and log levels
-- Raft timing parameters
-- Replication settings
+## How it works
 
-## Architecture
-- **Raft Layer**: Consensus and replication
-- **Storage Engine**: Persistent key-value store
-- **Network Layer**: TCP communication between nodes
-- **Client Interface**: Simple GET/PUT/DELETE API
+Every write is appended to the leader's log and replicated to the followers. It is applied and acknowledged once a majority has stored it. Each node applies the same log in the same order to an in-memory map.
 
-## Requirements
-- C++17 compiler
-- CMake 3.12+
-- Linux
+- **Election:** randomized timeouts, one vote per term, and the vote is persisted across restarts.
+- **Replication:** followers keep entries that already match and truncate only at the first conflict. Leaders back up past conflicting terms in one step.
+- **Reads:** GETs go through the log, so they are linearizable.
+- **Retries:** each client tags requests with an ID and sequence number, so a retried write is applied once.
+
+## Layout
+
+```
+src/raft/         election, replication, commit
+src/kvstore/      state machine and client sessions
+src/network/      peer transport and message encoding
+src/server/       client-facing server (Raft port + 1000)
+src/client/       C++ client library
+src/persistence/  term, vote, and log storage
+src/config/       example 3-node configuration
+tests/            unit tests and in-process cluster tests
+```
+
+## Limitations
+
+- The log is persisted but not yet fsynced, so a power loss can lose acknowledged writes.
+- There are no snapshots, so the log grows without bound.
+- Reads cost a full replication round. ReadIndex is planned.
+- It runs a single Raft group with a fixed membership.
