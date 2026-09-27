@@ -37,7 +37,8 @@ namespace raft
             int leader_hint = 0;
         };
         
-        ClientResult submit(const KVOperation &op, std::chrono::milliseconds timeout);
+        ClientResult submit(const KVOperation &op, std::chrono::milliseconds timeout,
+            uint64_t client_id = 0, uint64_t sequence_num = 0);
         RaftNode(int node_id, const Config &config);
         ~RaftNode();
 

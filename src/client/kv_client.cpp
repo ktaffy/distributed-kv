@@ -6,11 +6,19 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <random>
 
 namespace raft
 {
     KVClient::KVClient(std::vector<std::string> endpoints, std::chrono::milliseconds timeout)
-        : endpoints_(std::move(endpoints)), timeout_(timeout) {}
+        : endpoints_(std::move(endpoints)), timeout_(timeout)
+    {
+        std::random_device rd;
+        do
+        {
+            client_id_ = (static_cast<uint64_t>(rd()) << 32) | rd();
+        } while (client_id_ == 0);
+    }
 
     KVClient::~KVClient()
     {
@@ -44,6 +52,7 @@ namespace raft
         size_t rotation = 0;
         std::string target = connected_to_.empty() ? endpoints_[0] : connected_to_;
 
+        uint64_t seq = ++next_seq_;
         auto deadline = std::chrono::steady_clock::now() + timeout_;
         while (std::chrono::steady_clock::now() < deadline)
         {
@@ -62,6 +71,8 @@ namespace raft
             request.message_id = next_message_id_++;
             request.key = key;
             request.value = value;
+            request.client_id = client_id_;
+            request.sequence_num = seq;
 
             ClientResponse response;
             if (!exchange(request, response))

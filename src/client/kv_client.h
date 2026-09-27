@@ -32,7 +32,9 @@ namespace raft
         bool connect_to(const std::string &endpoint);
         void disconnect();
         bool exchange(const ClientRequest &request, ClientResponse &response);
-
+        
+        uint64_t client_id_;
+        uint64_t next_seq_ = 0;
         std::vector<std::string> endpoints_;
         std::chrono::milliseconds timeout_;
         std::string connected_to_;

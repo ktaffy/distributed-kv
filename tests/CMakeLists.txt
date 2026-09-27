@@ -5,6 +5,7 @@ add_executable(unit_tests
     test_raft_node.cpp
     test_serialization.cpp
     test_client.cpp
+    test_state_machine.cpp
     ${PROJECT_SOURCE_DIR}/src/raft/log_entry.cpp
     ${PROJECT_SOURCE_DIR}/src/raft/raft_state.cpp
     ${PROJECT_SOURCE_DIR}/src/raft/raft_node.cpp

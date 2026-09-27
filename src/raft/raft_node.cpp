@@ -220,7 +220,8 @@ namespace raft
         return state_->get_state();
     }
 
-    RaftNode::ClientResult RaftNode::submit(const KVOperation &op, std::chrono::milliseconds timeout)
+    RaftNode::ClientResult RaftNode::submit(const KVOperation &op, std::chrono::milliseconds timeout,
+        uint64_t client_id, uint64_t sequence_num)
     {
         ClientResult result;
         std::unique_lock<std::mutex> lock(state_mutex_);
@@ -234,7 +235,7 @@ namespace raft
 
         uint32_t term = state_->get_current_term();
         uint32_t index = log_storage_->get_last_index() + 1;
-        if (!log_storage_->append_entry(op.to_log_entry(term, index)))
+        if (!log_storage_->append_entry(op.to_log_entry(term, index, client_id, sequence_num)))
         {
             result.error = "append failed";
             return result;
@@ -638,7 +639,7 @@ namespace raft
             result.term = entry.term;
 
             if (entry.is_client_command())
-                result.found = state_machine_.apply(KVOperation::from_log_entry(entry), result.value);
+                result.found = state_machine_.apply(KVOperation::from_log_entry(entry), entry.client_id, entry.sequence_num, result.value);
 
             state_->set_last_applied(i);
 

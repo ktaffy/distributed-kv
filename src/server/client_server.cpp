@@ -125,7 +125,7 @@ namespace raft
             type = KVOperation::Type::DELETE;
 
         auto timeout = std::chrono::milliseconds(std::max<uint32_t>(config_.get_client_timeout_ms(), 1000));
-        auto result = node_.submit(KVOperation(type, request->key, request->value), timeout);
+        auto result = node_.submit(KVOperation(type, request->key, request->value), timeout, request->client_id, request->sequence_num);
 
         response.success = result.ok;
         response.found = result.found;
