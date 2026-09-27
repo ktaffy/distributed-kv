@@ -1,4 +1,5 @@
 #include "persistent_state.h"
+#include <cstddef>
 #include <fstream>
 #include <filesystem>
 #include <cstring>
@@ -241,7 +242,7 @@ namespace raft
     {
         uint32_t checksum = 0;
         const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&data);
-        size_t size = sizeof(StateData) - sizeof(data.checksum);
+        size_t size = offsetof(StateData, checksum);
 
         for (size_t i = 0; i < size; ++i)
         {

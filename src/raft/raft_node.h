@@ -24,6 +24,7 @@ namespace raft
 
     class RaftNode
     {
+    friend class RaftNodeTestPeer;
     public:
         RaftNode(int node_id, const Config &config);
         ~RaftNode();

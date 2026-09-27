@@ -261,7 +261,7 @@ namespace raft
             return;
         }
 
-        if (request.term > state_->get_current_term())
+        if (request.term > state_->get_current_term() || state_->is_candidate())
         {
             become_follower(request.term);
             response.term = request.term;
@@ -357,12 +357,15 @@ namespace raft
         logger_->info("Node {} becoming FOLLOWER for term {}", node_id_, term);
 
         state_->set_state(NodeState::FOLLOWER);
-        state_->set_current_term(term);
-        state_->clear_voted_for();
         state_->clear_leader_id();
 
-        persistent_state_->set_current_term(term);
-        persistent_state_->clear_voted_for();
+        if (static_cast<uint32_t>(term) > state_->get_current_term())
+        {
+            state_->set_current_term(term);
+            state_->clear_voted_for();
+            persistent_state_->set_current_term(term);
+            persistent_state_->clear_voted_for();
+        }
 
         reset_election_timeout();
     }
@@ -490,14 +493,14 @@ namespace raft
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
 
-        if (!state_->is_candidate() || response.term != state_->get_current_term())
-        {
-            return;
-        }
-
         if (response.term > state_->get_current_term())
         {
             become_follower(response.term);
+            return;
+        }
+
+        if (!state_->is_candidate() || response.term != state_->get_current_term())
+        {
             return;
         }
 
@@ -519,14 +522,14 @@ namespace raft
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
 
-        if (!is_leader() || response.term != state_->get_current_term())
-        {
-            return;
-        }
-
         if (response.term > state_->get_current_term())
         {
             become_follower(response.term);
+            return;
+        }
+
+        if (!is_leader() || response.term != state_->get_current_term())
+        {
             return;
         }
 
