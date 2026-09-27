@@ -1,447 +1,178 @@
 #include "message.h"
-#include <sstream>
-#include <iomanip>
-#include <cstring>
-#include "../raft/log_entry.h"
+#include "../utils/codec.h"
 
 namespace raft
 {
+    namespace
+    {
+        void write_header(Writer &w, const Message &m)
+        {
+            w.u8(static_cast<uint8_t>(m.type));
+            w.u32(m.message_id);
+            w.u32(m.source_node_id);
+            w.u32(m.dest_node_id);
+            w.u64(m.timestamp);
+        }
+
+        bool read_header(Reader &r, Message &m)
+        {
+            uint8_t type;
+            if (!r.u8(type) || !r.u32(m.message_id) || !r.u32(m.source_node_id) ||
+                !r.u32(m.dest_node_id) || !r.u64(m.timestamp))
+                return false;
+            m.type = static_cast<MessageType>(type);
+            return true;
+        }
+
+        bool read_bool(Reader &r, bool &b)
+        {
+            uint8_t v;
+            if (!r.u8(v))
+                return false;
+            b = v != 0;
+            return true;
+        }
+    }
 
     std::string RequestVoteRPC::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << term << "|"
-            << candidate_id << "|"
-            << last_log_index << "|"
-            << last_log_term;
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.u32(term);
+        w.u32(candidate_id);
+        w.u32(last_log_index);
+        w.u32(last_log_term);
+        return w.take();
     }
 
     bool RequestVoteRPC::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        candidate_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        last_log_index = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        last_log_term = std::stoul(token);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && r.u32(term) && r.u32(candidate_id) &&
+               r.u32(last_log_index) && r.u32(last_log_term) && r.done();
     }
 
     std::string RequestVoteResponse::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << term << "|"
-            << (vote_granted ? 1 : 0);
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.u32(term);
+        w.u8(vote_granted ? 1 : 0);
+        return w.take();
     }
 
     bool RequestVoteResponse::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        vote_granted = (std::stoi(token) == 1);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && r.u32(term) && read_bool(r, vote_granted) && r.done();
     }
 
     std::string AppendEntriesRPC::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << term << "|"
-            << leader_id << "|"
-            << prev_log_index << "|"
-            << prev_log_term << "|"
-            << leader_commit << "|"
-            << entries.size();
-
+        Writer w;
+        write_header(w, *this);
+        w.u32(term);
+        w.u32(leader_id);
+        w.u32(prev_log_index);
+        w.u32(prev_log_term);
+        w.u32(leader_commit);
+        w.u32(static_cast<uint32_t>(entries.size()));
         for (const auto &entry : entries)
-        {
-            oss << "|" << entry.serialize();
-        }
-
-        return oss.str();
+            entry.encode(w);
+        return w.take();
     }
 
     bool AppendEntriesRPC::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
+        Reader r(data);
+        uint32_t count;
+        if (!read_header(r, *this) || !r.u32(term) || !r.u32(leader_id) ||
+            !r.u32(prev_log_index) || !r.u32(prev_log_term) || !r.u32(leader_commit) ||
+            !r.u32(count))
             return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        leader_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        prev_log_index = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        prev_log_term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        leader_commit = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        size_t entry_count = std::stoul(token);
 
         entries.clear();
-        entries.reserve(entry_count);
-
-        for (size_t i = 0; i < entry_count; ++i)
+        for (uint32_t i = 0; i < count; ++i)
         {
-            if (!std::getline(iss, token, '|'))
-                return false;
             LogEntry entry;
-            if (!entry.deserialize(token))
+            if (!entry.decode(r))
                 return false;
-            entries.push_back(entry);
+            entries.push_back(std::move(entry));
         }
-
-        return true;
+        return r.done();
     }
 
     std::string AppendEntriesResponse::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << term << "|"
-            << (success ? 1 : 0) << "|"
-            << match_index << "|"
-            << conflict_index << "|"
-            << conflict_term;
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.u32(term);
+        w.u8(success ? 1 : 0);
+        w.u32(match_index);
+        w.u32(conflict_index);
+        w.u32(conflict_term);
+        return w.take();
     }
 
     bool AppendEntriesResponse::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        success = (std::stoi(token) == 1);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        match_index = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        conflict_index = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        conflict_term = std::stoul(token);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && r.u32(term) && read_bool(r, success) &&
+               r.u32(match_index) && r.u32(conflict_index) && r.u32(conflict_term) && r.done();
     }
 
     std::string ClientRequest::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << operation << "|"
-            << key << "|"
-            << value << "|"
-            << client_id << "|"
-            << sequence_num;
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.str(operation);
+        w.str(key);
+        w.str(value);
+        w.u64(client_id);
+        w.u64(sequence_num);
+        return w.take();
     }
 
     bool ClientRequest::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        operation = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        key = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        value = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        client_id = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        sequence_num = std::stoull(token);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && r.str(operation) && r.str(key) && r.str(value) &&
+               r.u64(client_id) && r.u64(sequence_num) && r.done();
     }
 
     std::string ClientResponse::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << (success ? 1 : 0) << "|"
-            << value << "|"
-            << error_message << "|"
-            << leader_hint;
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.u8(success ? 1 : 0);
+        w.str(value);
+        w.str(error_message);
+        w.u32(leader_hint);
+        return w.take();
     }
 
     bool ClientResponse::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        success = (std::stoi(token) == 1);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        value = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        error_message = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        leader_hint = std::stoul(token);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && read_bool(r, success) && r.str(value) &&
+               r.str(error_message) && r.u32(leader_hint) && r.done();
     }
 
     std::string HeartbeatMessage::serialize() const
     {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(type) << "|"
-            << message_id << "|"
-            << source_node_id << "|"
-            << dest_node_id << "|"
-            << timestamp << "|"
-            << term << "|"
-            << leader_id << "|"
-            << commit_index;
-        return oss.str();
+        Writer w;
+        write_header(w, *this);
+        w.u32(term);
+        w.u32(leader_id);
+        w.u32(commit_index);
+        return w.take();
     }
 
     bool HeartbeatMessage::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<MessageType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        message_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        source_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        dest_node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        term = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        leader_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        commit_index = std::stoul(token);
-
-        return true;
+        Reader r(data);
+        return read_header(r, *this) && r.u32(term) && r.u32(leader_id) &&
+               r.u32(commit_index) && r.done();
     }
 
     std::unique_ptr<Message> create_message_from_data(const std::string &data)
@@ -449,73 +180,43 @@ namespace raft
         if (data.empty())
             return nullptr;
 
-        std::istringstream iss(data);
-        std::string type_str;
-        if (!std::getline(iss, type_str, '|'))
-            return nullptr;
-
-        MessageType type = static_cast<MessageType>(std::stoi(type_str));
+        auto type = static_cast<MessageType>(static_cast<uint8_t>(data[0]));
+        std::unique_ptr<Message> msg;
 
         switch (type)
         {
         case MessageType::REQUEST_VOTE:
-        {
-            auto msg = std::make_unique<RequestVoteRPC>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<RequestVoteRPC>();
             break;
-        }
         case MessageType::REQUEST_VOTE_RESPONSE:
-        {
-            auto msg = std::make_unique<RequestVoteResponse>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<RequestVoteResponse>();
             break;
-        }
         case MessageType::APPEND_ENTRIES:
-        {
-            auto msg = std::make_unique<AppendEntriesRPC>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<AppendEntriesRPC>();
             break;
-        }
         case MessageType::APPEND_ENTRIES_RESPONSE:
-        {
-            auto msg = std::make_unique<AppendEntriesResponse>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<AppendEntriesResponse>();
             break;
-        }
         case MessageType::CLIENT_GET:
         case MessageType::CLIENT_PUT:
         case MessageType::CLIENT_DELETE:
-        {
-            auto msg = std::make_unique<ClientRequest>(type);
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<ClientRequest>(type);
             break;
-        }
         case MessageType::CLIENT_RESPONSE:
-        {
-            auto msg = std::make_unique<ClientResponse>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<ClientResponse>();
             break;
-        }
         case MessageType::HEARTBEAT:
-        {
-            auto msg = std::make_unique<HeartbeatMessage>();
-            if (msg->deserialize(data))
-                return std::move(msg);
+            msg = std::make_unique<HeartbeatMessage>();
             break;
-        }
         default:
-            break;
+            return nullptr;
         }
 
-        return nullptr;
+        if (!msg->deserialize(data))
+            return nullptr;
+        return msg;
     }
-
+    
     std::string message_type_to_string(MessageType type)
     {
         switch (type)

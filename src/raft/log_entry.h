@@ -7,7 +7,8 @@
 
 namespace raft
 {
-
+    class Writer;
+    class Reader;
     enum class LogEntryType : uint8_t
     {
         NO_OP = 0,
@@ -42,6 +43,9 @@ namespace raft
 
         std::string serialize() const;
         bool deserialize(const std::string &data);
+
+        void encode(Writer &w) const;
+        bool decode(Reader &r);
 
         bool is_no_op() const { return type == LogEntryType::NO_OP; }
         bool is_client_command() const { return type == LogEntryType::CLIENT_COMMAND; }

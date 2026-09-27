@@ -1,56 +1,80 @@
 #include "log_entry.h"
+#include "../utils/codec.h"
 #include <sstream>
 #include <iomanip>
 
 namespace raft
 {
+    void LogEntry::encode(Writer &w) const
+    {
+        w.u32(term);
+        w.u32(index);
+        w.u8(static_cast<uint8_t>(type));
+        w.str(command);
+        w.u64(timestamp);
+        w.u64(client_id);
+        w.u64(sequence_num);
+    }
+
+    bool LogEntry::decode(Reader &r)
+    {
+        uint8_t t;
+        if (!r.u32(term) || !r.u32(index) || !r.u8(t) || !r.str(command) ||
+            !r.u64(timestamp) || !r.u64(client_id) || !r.u64(sequence_num))
+            return false;
+        type = static_cast<LogEntryType>(t);
+        return true;
+    }
 
     std::string LogEntry::serialize() const
     {
-        std::ostringstream oss;
-        oss << term << "|"
-            << index << "|"
-            << static_cast<uint8_t>(type) << "|"
-            << command << "|"
-            << timestamp << "|"
-            << client_id << "|"
-            << sequence_num;
-        return oss.str();
+        Writer w;
+        encode(w);
+        return w.take();
     }
 
     bool LogEntry::deserialize(const std::string &data)
     {
-        std::istringstream iss(data);
-        std::string token;
+        Reader r(data);
+        return decode(r) && r.done();
+    }
 
-        if (!std::getline(iss, token, '|'))
+    std::string KVOperation::serialize() const
+    {
+        Writer w;
+        w.u8(static_cast<uint8_t>(operation));
+        w.str(key);
+        w.str(value);
+        return w.take();
+    }
+
+    bool KVOperation::deserialize(const std::string &data)
+    {
+        Reader r(data);
+        uint8_t op;
+        if (!r.u8(op) || !r.str(key) || !r.str(value) || !r.done())
             return false;
-        term = std::stoul(token);
+        operation = static_cast<Type>(op);
+        return true;
+    }
 
-        if (!std::getline(iss, token, '|'))
+    std::string ConfigurationEntry::serialize() const
+    {
+        Writer w;
+        w.u8(static_cast<uint8_t>(change_type));
+        w.u32(node_id);
+        w.str(node_address);
+        w.u32(old_node_id);
+        return w.take();
+    }
+
+    bool ConfigurationEntry::deserialize(const std::string &data)
+    {
+        Reader r(data);
+        uint8_t ct;
+        if (!r.u8(ct) || !r.u32(node_id) || !r.str(node_address) || !r.u32(old_node_id) || !r.done())
             return false;
-        index = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        type = static_cast<LogEntryType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        command = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        timestamp = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        client_id = std::stoull(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        sequence_num = std::stoull(token);
-
+        change_type = static_cast<ChangeType>(ct);
         return true;
     }
 
@@ -65,35 +89,6 @@ namespace raft
             << ", client_id=" << client_id
             << ", sequence_num=" << sequence_num << "}";
         return oss.str();
-    }
-
-    std::string KVOperation::serialize() const
-    {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(operation) << "|"
-            << key << "|"
-            << value;
-        return oss.str();
-    }
-
-    bool KVOperation::deserialize(const std::string &data)
-    {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        operation = static_cast<Type>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        key = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        value = token;
-
-        return true;
     }
 
     LogEntry KVOperation::to_log_entry(uint32_t term, uint32_t index,
@@ -148,40 +143,6 @@ namespace raft
         if (op_str == "DELETE")
             return Type::DELETE;
         return Type::GET;
-    }
-
-    std::string ConfigurationEntry::serialize() const
-    {
-        std::ostringstream oss;
-        oss << static_cast<uint8_t>(change_type) << "|"
-            << node_id << "|"
-            << node_address << "|"
-            << old_node_id;
-        return oss.str();
-    }
-
-    bool ConfigurationEntry::deserialize(const std::string &data)
-    {
-        std::istringstream iss(data);
-        std::string token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        change_type = static_cast<ChangeType>(std::stoi(token));
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        node_id = std::stoul(token);
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        node_address = token;
-
-        if (!std::getline(iss, token, '|'))
-            return false;
-        old_node_id = std::stoul(token);
-
-        return true;
     }
 
     LogEntry ConfigurationEntry::to_log_entry(uint32_t term, uint32_t index) const
