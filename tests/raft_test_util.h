@@ -6,6 +6,9 @@
 #include <string>
 #include <system_error>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <vector>
 
 #include "raft/raft_node.h"
 #include "utils/config.h"
@@ -65,6 +68,49 @@ namespace raft
 
 namespace kvtest
 {
+    inline std::vector<uint16_t> free_ports(size_t count)
+    {
+        std::vector<int> fds;
+        std::vector<uint16_t> ports;
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+
+            socklen_t len = sizeof(addr);
+            getsockname(fd, reinterpret_cast<sockaddr *>(&addr), &len);
+            ports.push_back(ntohs(addr.sin_port));
+            fds.push_back(fd);
+        }
+
+        for (int fd : fds)
+            close(fd);
+        return ports;
+    }
+
+    inline raft::Config make_config(uint32_t self, const std::filesystem::path &data_dir,
+                                    const std::vector<uint16_t> &ports)
+    {
+        raft::Config config;
+        config.set_node_id(self);
+        config.set_listen_address("127.0.0.1");
+        config.set_listen_port(ports[self - 1]);
+        config.set_data_directory(data_dir.string());
+
+        for (uint32_t id = 1; id <= ports.size(); ++id)
+        {
+            raft::NodeConfig node;
+            node.node_id = id;
+            node.address = "127.0.0.1";
+            node.port = ports[id - 1];
+            config.add_cluster_node(node);
+        }
+        return config;
+    }
     struct TempDir
     {
         std::filesystem::path path;

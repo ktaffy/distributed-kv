@@ -70,6 +70,27 @@ namespace raft
         stop();
     }
 
+    void RaftNode::send_outbox(std::unique_lock<std::mutex> &lock)
+    {
+        std::vector<std::unique_ptr<Message>> messages;
+        messages.swap(outbox_);
+        lock.unlock();
+
+        for (auto &message : messages)
+        {
+            uint32_t dest = message->dest_node_id;
+            network_manager_->send_message(dest, std::move(message));
+        }
+
+        lock.lock();
+    }
+
+    void RaftNode::flush_outbox()
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        send_outbox(lock);
+    }
+
     void RaftNode::start()
     {
         if (running_.exchange(true))
@@ -128,7 +149,7 @@ namespace raft
             request->candidate_id = node_id_;
             request->last_log_index = log_storage_->get_last_index();
             request->last_log_term = log_storage_->get_last_term();
-            network_manager_->send_message(peer_id, std::move(request));
+            outbox_.push_back(std::move(request));
         }
 
         if (state_->has_majority_votes())
@@ -150,6 +171,7 @@ namespace raft
             if (std::chrono::steady_clock::now() >= deadline)
             {
                 become_candidate();
+                send_outbox(lock);
                 continue;
             }
 
@@ -163,7 +185,10 @@ namespace raft
         while (running_.load())
         {
             if (state_->is_leader())
+            {
                 send_append_entries();
+                send_outbox(lock);
+            }
 
             state_cv_.wait_for(lock, std::chrono::milliseconds(HEARTBEAT_INTERVAL_MS),
                             [this] { return !running_.load(); });
@@ -461,8 +486,7 @@ namespace raft
 
         logger_->debug("Sending AppendEntries to {} with {} entries (next_index={})",
                        node_id, request->entries.size(), next_index);
-
-        network_manager_->send_message(node_id, std::move(request));
+        outbox_.push_back(std::move(request));
     }
 
     void RaftNode::process_vote_response(const RequestVoteResponse &response)
@@ -671,6 +695,7 @@ namespace raft
                           static_cast<int>(message->type));
             break;
         }
+        flush_outbox();
     }
 
     void RaftNode::handle_connection_change(uint32_t node_id, bool connected)

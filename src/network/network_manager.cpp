@@ -51,20 +51,50 @@ namespace raft
 
     void NetworkManager::stop()
     {
-        if (!running_.load())
-        {
+        if (!running_.exchange(false))
             return;
-        }
-
-        running_.store(false);
 
         {
             std::lock_guard<std::mutex> lock(stop_mutex_);
         }
         stop_cv_.notify_all();
-        
+        {
+            std::lock_guard<std::mutex> lock(messages_mutex_);
+        }
+        messages_cv_.notify_all();
+
         if (server_socket_ >= 0)
             shutdown(server_socket_, SHUT_RDWR);
+
+        if (listen_thread_.joinable())
+            listen_thread_.join();
+        if (connection_manager_thread_.joinable())
+            connection_manager_thread_.join();
+
+        {
+            std::lock_guard<std::mutex> peers_lock(peers_mutex_);
+            std::lock_guard<std::mutex> connections_lock(connections_mutex_);
+            for (auto &pair : connections_)
+                shutdown(pair.second->socket_fd, SHUT_RDWR);
+            for (auto &pair : peers_)
+                if (pair.second->connection)
+                    shutdown(pair.second->connection->socket_fd, SHUT_RDWR);
+        }
+
+        std::vector<std::thread> readers;
+        {
+            std::lock_guard<std::mutex> lock(readers_mutex_);
+            readers.swap(reader_threads_);
+        }
+        for (auto &reader : readers)
+            reader.join();
+
+        if (message_processor_thread_.joinable())
+            message_processor_thread_.join();
+        if (heartbeat_thread_.joinable())
+            heartbeat_thread_.join();
+        if (request_timeout_thread_.joinable())
+            request_timeout_thread_.join();
 
         if (server_socket_ >= 0)
         {
@@ -72,28 +102,51 @@ namespace raft
             server_socket_ = -1;
         }
 
+        std::lock_guard<std::mutex> peers_lock(peers_mutex_);
+        std::lock_guard<std::mutex> connections_lock(connections_mutex_);
+        connections_.clear();
+        node_connections_.clear();
+        for (auto &pair : peers_)
+            pair.second->connection.reset();
+    }
+
+    void NetworkManager::start_reader(std::shared_ptr<Connection> conn)
+    {
+        std::lock_guard<std::mutex> lock(readers_mutex_);
+        reader_threads_.emplace_back([this, conn] { handle_connection_data(conn.get()); });
+    }
+
+    void NetworkManager::handle_new_connection(int client_socket, const std::string &client_addr)
+    {
+        auto connection = std::make_shared<Connection>();
+        connection->socket_fd = client_socket;
+        connection->remote_address = client_addr;
+        connection->connected.store(true);
+        connection->last_activity = std::chrono::steady_clock::now();
+
         {
             std::lock_guard<std::mutex> lock(connections_mutex_);
-            for (auto &pair : connections_)
-            {
-                cleanup_connection(pair.second.get());
-            }
-            connections_.clear();
-            node_connections_.clear();
+            connections_[client_socket] = connection;
         }
 
-        messages_cv_.notify_all();
+        start_reader(connection);
+    }
 
-        if (listen_thread_.joinable())
-            listen_thread_.join();
-        if (connection_manager_thread_.joinable())
-            connection_manager_thread_.join();
-        if (message_processor_thread_.joinable())
-            message_processor_thread_.join();
-        if (heartbeat_thread_.joinable())
-            heartbeat_thread_.join();
-        if (request_timeout_thread_.joinable())
-            request_timeout_thread_.join();
+    void NetworkManager::handle_request_response(std::unique_ptr<Message> message)
+    {
+        {
+            std::lock_guard<std::mutex> lock(requests_mutex_);
+            auto it = pending_requests_.find(message->message_id);
+            if (it != pending_requests_.end())
+            {
+                it->second->promise.set_value(std::move(message));
+                pending_requests_.erase(it);
+                return;
+            }
+        }
+
+        if (message_handler_)
+            message_handler_(std::move(message));
     }
 
     bool NetworkManager::wait_while_running(std::chrono::milliseconds duration)
@@ -332,7 +385,6 @@ namespace raft
         {
             {
                 std::lock_guard<std::mutex> peers_lock(peers_mutex_);
-                std::lock_guard<std::mutex> connections_lock(connections_mutex_);
 
                 for (auto &pair : peers_)
                 {
@@ -418,26 +470,6 @@ namespace raft
         }
     }
 
-    void NetworkManager::handle_new_connection(int client_socket, const std::string &client_addr)
-    {
-        auto connection = std::make_unique<Connection>();
-        connection->socket_fd = client_socket;
-        connection->remote_address = client_addr;
-        connection->connected.store(true);
-        connection->last_activity = std::chrono::steady_clock::now();
-
-        Connection *conn_ptr = connection.get();
-
-        {
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            connections_[client_socket] = std::move(connection);
-        }
-
-        std::thread([this, conn_ptr]()
-                    { handle_connection_data(conn_ptr); })
-            .detach();
-    }
-
     void NetworkManager::handle_connection_data(Connection *conn)
     {
         while (running_.load() && conn->connected.load())
@@ -509,7 +541,7 @@ namespace raft
 
         set_socket_options(sock);
 
-        auto connection = std::make_unique<Connection>();
+        auto connection = std::make_shared<Connection>();
         connection->socket_fd = sock;
         connection->remote_address = peer.address;
         connection->remote_port = peer.port;
@@ -517,23 +549,16 @@ namespace raft
         connection->connected.store(true);
         connection->last_activity = std::chrono::steady_clock::now();
 
-        Connection *conn_ptr = connection.get();
-        peer.connection = std::move(connection);
-
         {
             std::lock_guard<std::mutex> lock(connections_mutex_);
-            node_connections_[peer.node_id] = peer.connection.get();
+            node_connections_[peer.node_id] = connection.get();
+            peer.connection = connection;
         }
 
         if (connection_callback_)
-        {
             connection_callback_(peer.node_id, true);
-        }
 
-        std::thread([this, conn_ptr]()
-                    { handle_connection_data(conn_ptr); })
-            .detach();
-
+        start_reader(connection);
         return true;
     }
 
@@ -623,18 +648,6 @@ namespace raft
         return next_message_id_.fetch_add(1);
     }
 
-    void NetworkManager::handle_request_response(std::unique_ptr<Message> message)
-    {
-        std::lock_guard<std::mutex> lock(requests_mutex_);
-        auto it = pending_requests_.find(message->message_id);
-
-        if (it != pending_requests_.end())
-        {
-            it->second->promise.set_value(std::move(message));
-            pending_requests_.erase(it);
-        }
-    }
-
     void NetworkManager::cleanup_expired_requests()
     {
         std::lock_guard<std::mutex> lock(requests_mutex_);
@@ -705,7 +718,6 @@ namespace raft
     void NetworkManager::set_socket_options(int socket_fd)
     {
         int reuse = 1;
-        setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
         timeval timeout;
         timeout.tv_sec = send_timeout_.count() / 1000;

@@ -94,7 +94,7 @@ namespace raft
             uint32_t node_id;
             std::string address;
             uint16_t port;
-            std::unique_ptr<Connection> connection;
+            std::shared_ptr<Connection> connection;
             std::chrono::steady_clock::time_point last_attempt;
             uint32_t retry_count;
 
@@ -129,6 +129,11 @@ namespace raft
 
         bool wait_while_running(std::chrono::milliseconds duration);
 
+        void start_reader(std::shared_ptr<Connection> conn);
+
+        std::vector<std::thread> reader_threads_;
+        std::mutex readers_mutex_;
+
         std::mutex stop_mutex_;
         std::condition_variable stop_cv_;
 
@@ -140,7 +145,7 @@ namespace raft
         int server_socket_;
 
         std::unordered_map<uint32_t, std::unique_ptr<PeerInfo>> peers_;
-        std::unordered_map<int, std::unique_ptr<Connection>> connections_;
+        std::unordered_map<int, std::shared_ptr<Connection>> connections_;
         std::unordered_map<uint32_t, Connection *> node_connections_;
 
         std::queue<std::unique_ptr<Message>> incoming_messages_;

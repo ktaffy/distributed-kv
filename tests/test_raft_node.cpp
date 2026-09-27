@@ -305,3 +305,39 @@ TEST(single_node_elects_itself_and_stops_promptly)
     CHECK(elapsed < std::chrono::seconds(3));
 }
 
+TEST(three_node_cluster_elects_one_leader)
+{
+    TempDir d1, d2, d3;
+    auto ports = kvtest::free_ports(3);
+    RaftNode n1(1, make_config(1, d1.path, ports));
+    RaftNode n2(2, make_config(2, d2.path, ports));
+    RaftNode n3(3, make_config(3, d3.path, ports));
+    std::vector<RaftNode *> nodes{&n1, &n2, &n3};
+
+    for (auto *n : nodes)
+        n->start();
+
+    auto leader_count = [&] {
+        int count = 0;
+        for (auto *n : nodes)
+            count += n->is_leader() ? 1 : 0;
+        return count;
+    };
+    auto agreed = [&] {
+        int leader = nodes[0]->get_leader_id();
+        for (auto *n : nodes)
+            if (n->get_leader_id() == 0 || n->get_leader_id() != leader)
+                return false;
+        return true;
+    };
+
+    for (int i = 0; i < 500 && !(leader_count() == 1 && agreed()); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    CHECK_EQ(leader_count(), 1);
+    CHECK(agreed());
+
+    for (auto *n : nodes)
+        n->stop();
+}
+

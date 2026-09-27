@@ -51,6 +51,10 @@ namespace raft
         const LogEntry &get_log_entry(size_t index) const;
 
     private:
+        void flush_outbox();
+        void send_outbox(std::unique_lock<std::mutex> &lock);
+
+        std::vector<std::unique_ptr<Message>> outbox_;
         void become_follower(int term);
         void become_candidate();
         void become_leader();

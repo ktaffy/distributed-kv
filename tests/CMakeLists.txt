@@ -17,4 +17,4 @@ add_executable(unit_tests
 
 target_link_libraries(unit_tests Threads::Threads)
 add_test(NAME unit_tests COMMAND unit_tests)
-set_tests_properties(unit_tests PROPERTIES TIMEOUT 10)
+set_tests_properties(unit_tests PROPERTIES TIMEOUT 30)
