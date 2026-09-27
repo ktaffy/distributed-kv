@@ -252,14 +252,8 @@ namespace raft
         response.conflict_index = 0;
         response.conflict_term = 0;
 
-        logger_->debug("Received AppendEntries from {} for term {} with {} entries",
-                       request.leader_id, request.term, request.entries.size());
-
         if (request.term < state_->get_current_term())
-        {
-            logger_->debug("Rejecting AppendEntries - stale term");
             return;
-        }
 
         if (request.term > state_->get_current_term() || state_->is_candidate())
         {
@@ -275,67 +269,45 @@ namespace raft
             if (!log_storage_->has_entry(request.prev_log_index))
             {
                 response.conflict_index = log_storage_->get_last_index() + 1;
-                logger_->debug("Log too short - missing entry {}", request.prev_log_index);
                 return;
             }
 
-            LogEntry prev_entry = log_storage_->get_entry(request.prev_log_index);
-            if (prev_entry.term != request.prev_log_term)
+            uint32_t prev_term = log_storage_->get_entry(request.prev_log_index).term;
+            if (prev_term != request.prev_log_term)
             {
-                response.conflict_term = prev_entry.term;
-                response.conflict_index = request.prev_log_index;
-
-                for (uint32_t i = request.prev_log_index; i >= log_storage_->get_first_index(); --i)
-                {
-                    LogEntry entry = log_storage_->get_entry(i);
-                    if (entry.term != response.conflict_term)
-                    {
-                        response.conflict_index = i + 1;
-                        break;
-                    }
-                }
-
-                logger_->debug("Term mismatch at index {} - expected {}, got {}",
-                               request.prev_log_index, request.prev_log_term, prev_entry.term);
+                uint32_t first = log_storage_->get_first_index();
+                uint32_t i = request.prev_log_index;
+                while (i > first && log_storage_->get_entry(i - 1).term == prev_term)
+                    --i;
+                response.conflict_term = prev_term;
+                response.conflict_index = i;
                 return;
             }
         }
 
-        if (!request.entries.empty())
+        uint32_t index = request.prev_log_index;
+        for (const auto &entry : request.entries)
         {
-            uint32_t append_index = request.prev_log_index + 1;
-            if (log_storage_->has_entry(append_index))
+            ++index;
+            if (log_storage_->has_entry(index))
             {
-                LogEntry existing = log_storage_->get_entry(append_index);
-                if (existing.term != request.entries[0].term)
-                {
-                    log_storage_->truncate_from(append_index);
-                }
+                if (log_storage_->get_entry(index).term == entry.term)
+                    continue;
+                log_storage_->truncate_from(index);
             }
-
-            // Append new entries
-            for (const auto &entry : request.entries)
+            if (!log_storage_->append_entry(entry))
             {
-                if (!log_storage_->append_entry(entry))
-                {
-                    logger_->error("Failed to append entry {}", entry.index);
-                    return;
-                }
+                logger_->error("Failed to append entry {}", entry.index);
+                return;
             }
-
-            logger_->debug("Appended {} entries starting at index {}",
-                           request.entries.size(), append_index);
         }
 
-        if (request.leader_commit > state_->get_commit_index())
-        {
-            uint32_t new_commit = std::min(request.leader_commit, log_storage_->get_last_index());
+        uint32_t new_commit = std::min(request.leader_commit, index);
+        if (new_commit > state_->get_commit_index())
             state_->set_commit_index(new_commit);
-            logger_->debug("Updated commit index to {}", new_commit);
-        }
 
         response.success = true;
-        response.match_index = log_storage_->get_last_index();
+        response.match_index = index;
 
         apply_committed_entries();
     }
@@ -392,14 +364,14 @@ namespace raft
 
     void RaftNode::become_leader()
     {
-        logger_->info("Node {} becoming LEADER for term {}",
-                      node_id_, state_->get_current_term());
+        logger_->info("Node {} becoming LEADER for term {}", node_id_, state_->get_current_term());
 
         state_->set_state(NodeState::LEADER);
         state_->set_leader_id(node_id_);
 
-        uint32_t last_log_index = log_storage_->get_last_index();
-        state_->initialize_leader_state(last_log_index);
+        uint32_t last_index = log_storage_->get_last_index();
+        state_->initialize_leader_state(last_index);
+        log_storage_->append_entry(log_utils::create_no_op_entry(state_->get_current_term(), last_index + 1));
 
         send_append_entries();
     }
@@ -535,40 +507,30 @@ namespace raft
 
         if (response.success)
         {
-            // Update next_index and match_index
-            state_->set_match_index(node_id, response.match_index);
-            state_->set_next_index(node_id, response.match_index + 1);
-
-            logger_->debug("AppendEntries success from {} (match_index={})",
-                           node_id, response.match_index);
-
+            if (response.match_index > state_->get_match_index(node_id))
+                state_->set_match_index(node_id, response.match_index);
+            state_->set_next_index(node_id, state_->get_match_index(node_id) + 1);
             advance_commit_index();
         }
         else
         {
+            uint32_t next = response.conflict_index;
             if (response.conflict_term > 0)
             {
-                uint32_t new_next_index = response.conflict_index;
-                for (uint32_t i = response.conflict_index; i >= log_storage_->get_first_index(); --i)
+                uint32_t first = log_storage_->get_first_index();
+                for (uint32_t i = log_storage_->get_last_index(); i > 0 && i >= first; --i)
                 {
-                    LogEntry entry = log_storage_->get_entry(i);
-                    if (entry.term == response.conflict_term)
+                    uint32_t term = log_storage_->get_entry(i).term;
+                    if (term == response.conflict_term)
                     {
-                        new_next_index = i + 1;
+                        next = i + 1;
                         break;
                     }
+                    if (term < response.conflict_term)
+                        break;
                 }
-                state_->set_next_index(node_id, new_next_index);
             }
-            else
-            {
-                state_->set_next_index(node_id, response.conflict_index);
-            }
-
-            logger_->debug("AppendEntries failed from {} - new next_index={}",
-                           node_id, state_->get_next_index(node_id));
-
-            send_append_entries_to_node(node_id);
+            state_->set_next_index(node_id, std::max(next, 1u));
         }
     }
 

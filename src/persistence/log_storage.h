@@ -100,6 +100,8 @@ namespace raft
             SnapshotHeader() : version(0), last_included_index(0),
                                last_included_term(0), data_size(0), checksum(0) {}
         };
+        uint32_t first_index_unlocked() const;
+        uint32_t last_index_unlocked() const;
 
         bool load_log_file();
         bool save_log_file();

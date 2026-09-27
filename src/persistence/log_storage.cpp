@@ -55,7 +55,7 @@ namespace raft
     {
         std::lock_guard<std::mutex> lock(log_mutex_);
 
-        if (!log_entries_.empty() && entry.index != get_last_index() + 1)
+        if (!log_entries_.empty() && entry.index != last_index_unlocked() + 1)
         {
             return false;
         }
@@ -88,7 +88,7 @@ namespace raft
 
         for (const auto &entry : entries)
         {
-            if (!log_entries_.empty() && entry.index != get_last_index() + 1)
+            if (!log_entries_.empty() && entry.index != last_index_unlocked() + 1)
             {
                 return false;
             }
@@ -122,8 +122,8 @@ namespace raft
             return LogEntry();
         }
 
-        uint32_t first_index = get_first_index();
-        if (index < first_index || index > get_last_index())
+        uint32_t first_index = first_index_unlocked();
+        if (index < first_index || index > last_index_unlocked())
         {
             return LogEntry();
         }
@@ -146,8 +146,8 @@ namespace raft
             return {};
         }
 
-        uint32_t first_index = get_first_index();
-        uint32_t last_index = get_last_index();
+        uint32_t first_index = first_index_unlocked();
+        uint32_t last_index = last_index_unlocked();
 
         if (start_index > last_index || end_index < first_index)
         {
@@ -174,7 +174,7 @@ namespace raft
 
     std::vector<LogEntry> LogStorage::get_entries_from(uint32_t start_index) const
     {
-        return get_entries(start_index, get_last_index());
+        return get_entries(start_index, UINT32_MAX);
     }
 
     bool LogStorage::truncate_from(uint32_t index)
@@ -186,14 +186,14 @@ namespace raft
             return true;
         }
 
-        uint32_t first_index = get_first_index();
+        uint32_t first_index = first_index_unlocked();
         if (index <= first_index)
         {
             log_entries_.clear();
         }
         else
         {
-            uint32_t last_index = get_last_index();
+            uint32_t last_index = last_index_unlocked();
             if (index <= last_index)
             {
                 size_t new_size = index - first_index;
@@ -220,8 +220,8 @@ namespace raft
             return true;
         }
 
-        uint32_t first_index = get_first_index();
-        uint32_t last_index = get_last_index();
+        uint32_t first_index = first_index_unlocked();
+        uint32_t last_index = last_index_unlocked();
 
         if (index > last_index)
         {
@@ -248,14 +248,26 @@ namespace raft
         return true;
     }
 
+    uint32_t LogStorage::first_index_unlocked() const
+    {
+        return log_entries_.empty() ? snapshot_last_included_index_ + 1 : log_entries_.front().index;
+    }
+
+    uint32_t LogStorage::last_index_unlocked() const
+    {
+        return log_entries_.empty() ? snapshot_last_included_index_ : log_entries_.back().index;
+    }
+
+    uint32_t LogStorage::get_first_index() const
+    {
+        std::lock_guard<std::mutex> lock(log_mutex_);
+        return first_index_unlocked();
+    }
+
     uint32_t LogStorage::get_last_index() const
     {
         std::lock_guard<std::mutex> lock(log_mutex_);
-        if (log_entries_.empty())
-        {
-            return snapshot_last_included_index_;
-        }
-        return log_entries_.back().index;
+        return last_index_unlocked();
     }
 
     uint32_t LogStorage::get_last_term() const
@@ -266,16 +278,6 @@ namespace raft
             return snapshot_last_included_term_;
         }
         return log_entries_.back().term;
-    }
-
-    uint32_t LogStorage::get_first_index() const
-    {
-        std::lock_guard<std::mutex> lock(log_mutex_);
-        if (log_entries_.empty())
-        {
-            return snapshot_last_included_index_ + 1;
-        }
-        return log_entries_.front().index;
     }
 
     size_t LogStorage::get_entry_count() const
@@ -291,7 +293,7 @@ namespace raft
         {
             return false;
         }
-        return index >= get_first_index() && index <= get_last_index();
+        return index >= first_index_unlocked() && index <= last_index_unlocked();
     }
 
     bool LogStorage::is_empty() const
@@ -374,7 +376,7 @@ namespace raft
             return true;
         }
 
-        uint32_t first_index = get_first_index();
+        uint32_t first_index = first_index_unlocked();
         if (last_included_index < first_index)
         {
             return true;

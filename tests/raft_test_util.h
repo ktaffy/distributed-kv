@@ -44,6 +44,20 @@ namespace raft
         uint32_t voted_for() const { return node_.state_->get_voted_for(); }
         uint32_t persisted_voted_for() const { return node_.persistent_state_->get_voted_for(); }
 
+        void become_leader()
+        {
+            std::lock_guard<std::mutex> lock(node_.state_mutex_);
+            node_.become_leader();
+        }
+
+        void append(const LogEntry &entry) { node_.log_storage_->append_entry(entry); }
+        LogEntry entry_at(uint32_t index) const { return node_.log_storage_->get_entry(index); }
+        uint32_t last_index() const { return node_.log_storage_->get_last_index(); }
+        uint32_t commit_index() const { return node_.state_->get_commit_index(); }
+        void set_commit_index(uint32_t index) { node_.state_->set_commit_index(index); }
+        uint32_t next_index(uint32_t peer) const { return node_.state_->get_next_index(peer); }
+        uint32_t match_index(uint32_t peer) const { return node_.state_->get_match_index(peer); }
+
     private:
         RaftNode &node_;
     };
