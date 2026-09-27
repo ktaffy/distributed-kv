@@ -4,4 +4,10 @@ build:
 	./scripts/build.sh
 run:
 	./scripts/run_cluster.sh
-.PHONY: remove build run
+
+test:
+	cmake -S . -B build
+	cmake --build build --target unit_tests -j
+	ctest --test-dir build --output-on-failure
+
+.PHONY: remove build run test
