@@ -45,9 +45,6 @@ namespace raft
         void set_connection_callback(ConnectionCallback callback);
 
         bool send_message(uint32_t target_node_id, std::unique_ptr<Message> message);
-        std::future<std::unique_ptr<Message>> send_request(uint32_t target_node_id,
-                                                           std::unique_ptr<Message> request,
-                                                           std::chrono::milliseconds timeout);
 
         bool add_peer(uint32_t node_id, const std::string &address, uint16_t port);
         void remove_peer(uint32_t node_id);
@@ -80,15 +77,6 @@ namespace raft
         void reset_stats();
 
     private:
-        struct PendingRequest
-        {
-            uint32_t message_id;
-            std::promise<std::unique_ptr<Message>> promise;
-            std::chrono::steady_clock::time_point deadline;
-
-            PendingRequest(uint32_t id) : message_id(id) {}
-        };
-
         struct PeerInfo
         {
             uint32_t node_id;
@@ -105,7 +93,6 @@ namespace raft
         void listen_thread();
         void connection_manager_thread();
         void message_processor_thread();
-        void request_timeout_thread();
 
         void handle_new_connection(int client_socket, const std::string &client_addr);
         void handle_connection_data(Connection *conn);
@@ -117,10 +104,6 @@ namespace raft
 
         bool send_raw_data(Connection *conn, const std::string &data);
         std::string receive_raw_data(Connection *conn);
-
-        uint32_t generate_message_id();
-        void handle_request_response(std::unique_ptr<Message> message);
-        void cleanup_expired_requests();
 
         int create_server_socket();
         int create_client_socket();
@@ -148,12 +131,9 @@ namespace raft
         std::unordered_map<uint32_t, Connection *> node_connections_;
 
         std::queue<std::unique_ptr<Message>> incoming_messages_;
-        std::unordered_map<uint32_t, std::unique_ptr<PendingRequest>> pending_requests_;
 
         MessageHandler message_handler_;
         ConnectionCallback connection_callback_;
-
-        std::atomic<uint32_t> next_message_id_;
 
         std::chrono::milliseconds connection_timeout_;
         std::chrono::milliseconds send_timeout_;
@@ -162,14 +142,12 @@ namespace raft
         mutable std::mutex peers_mutex_;
         mutable std::mutex connections_mutex_;
         mutable std::mutex messages_mutex_;
-        mutable std::mutex requests_mutex_;
 
         std::condition_variable messages_cv_;
 
         std::thread listen_thread_;
         std::thread connection_manager_thread_;
         std::thread message_processor_thread_;
-        std::thread request_timeout_thread_;
 
         NetworkStats stats_;
         mutable std::mutex stats_mutex_;

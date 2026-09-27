@@ -37,8 +37,7 @@ namespace raft
     bool LogStorage::load()
     {
         bool log_loaded = load_log_file();
-        bool snapshot_loaded = load_snapshot_file();
-
+        load_snapshot_file();
         return log_loaded;
     }
 
@@ -569,12 +568,12 @@ namespace raft
         return true;
     }
 
-    bool LogStorage::append_to_log_file(const LogEntry &entry)
+    bool LogStorage::append_to_log_file(const LogEntry &)
     {
         return save_log_file();
     }
 
-    bool LogStorage::append_to_log_file(const std::vector<LogEntry> &entries)
+    bool LogStorage::append_to_log_file(const std::vector<LogEntry> &)
     {
         return save_log_file();
     }

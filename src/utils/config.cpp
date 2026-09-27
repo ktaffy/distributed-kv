@@ -235,7 +235,7 @@ namespace raft
             return false;
         }
 
-        if (listen_port_ == 0 || listen_port_ > 65535)
+        if (listen_port_ == 0)
         {
             std::cerr << "Error: invalid listen_port: " << listen_port_ << std::endl;
             return false;

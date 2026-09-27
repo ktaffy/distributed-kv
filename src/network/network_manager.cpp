@@ -12,7 +12,7 @@ namespace raft
 
     NetworkManager::NetworkManager(uint32_t node_id, const std::string &listen_address, uint16_t listen_port)
         : node_id_(node_id), listen_address_(listen_address), listen_port_(listen_port),
-          running_(false), server_socket_(-1), next_message_id_(1),
+          running_(false), server_socket_(-1),
           connection_timeout_(DEFAULT_CONNECTION_TIMEOUT),
           send_timeout_(DEFAULT_SEND_TIMEOUT),
           heartbeat_interval_(DEFAULT_HEARTBEAT_INTERVAL)
@@ -43,8 +43,6 @@ namespace raft
         listen_thread_ = std::thread(&NetworkManager::listen_thread, this);
         connection_manager_thread_ = std::thread(&NetworkManager::connection_manager_thread, this);
         message_processor_thread_ = std::thread(&NetworkManager::message_processor_thread, this);
-        request_timeout_thread_ = std::thread(&NetworkManager::request_timeout_thread, this);
-
         return true;
     }
 
@@ -91,9 +89,6 @@ namespace raft
         if (message_processor_thread_.joinable())
             message_processor_thread_.join();
 
-        if (request_timeout_thread_.joinable())
-            request_timeout_thread_.join();
-
         if (server_socket_ >= 0)
         {
             close(server_socket_);
@@ -128,23 +123,6 @@ namespace raft
         }
 
         start_reader(connection);
-    }
-
-    void NetworkManager::handle_request_response(std::unique_ptr<Message> message)
-    {
-        {
-            std::lock_guard<std::mutex> lock(requests_mutex_);
-            auto it = pending_requests_.find(message->message_id);
-            if (it != pending_requests_.end())
-            {
-                it->second->promise.set_value(std::move(message));
-                pending_requests_.erase(it);
-                return;
-            }
-        }
-
-        if (message_handler_)
-            message_handler_(std::move(message));
     }
 
     bool NetworkManager::wait_while_running(std::chrono::milliseconds duration)
@@ -206,36 +184,6 @@ namespace raft
         }
 
         return success;
-    }
-
-    std::future<std::unique_ptr<Message>> NetworkManager::send_request(uint32_t target_node_id,
-                                                                       std::unique_ptr<Message> request,
-                                                                       std::chrono::milliseconds timeout)
-    {
-        uint32_t message_id = generate_message_id();
-        request->message_id = message_id;
-
-        auto pending_request = std::make_unique<PendingRequest>(message_id);
-        auto future = pending_request->promise.get_future();
-        pending_request->deadline = std::chrono::steady_clock::now() + timeout;
-
-        {
-            std::lock_guard<std::mutex> lock(requests_mutex_);
-            pending_requests_[message_id] = std::move(pending_request);
-        }
-
-        if (!send_message(target_node_id, std::move(request)))
-        {
-            std::lock_guard<std::mutex> lock(requests_mutex_);
-            auto it = pending_requests_.find(message_id);
-            if (it != pending_requests_.end())
-            {
-                it->second->promise.set_value(nullptr);
-                pending_requests_.erase(it);
-            }
-        }
-
-        return future;
     }
 
     bool NetworkManager::add_peer(uint32_t node_id, const std::string &address, uint16_t port)
@@ -439,15 +387,6 @@ namespace raft
         }
     }
 
-    void NetworkManager::request_timeout_thread()
-    {
-        while (running_.load())
-        {
-            cleanup_expired_requests();
-            wait_while_running(std::chrono::milliseconds(1000));
-        }
-    }
-
     void NetworkManager::handle_connection_data(Connection *conn)
     {
         while (running_.load() && conn->connected.load())
@@ -481,16 +420,8 @@ namespace raft
 
     void NetworkManager::process_received_message(std::unique_ptr<Message> message)
     {
-        if (message->type == MessageType::REQUEST_VOTE_RESPONSE ||
-            message->type == MessageType::APPEND_ENTRIES_RESPONSE ||
-            message->type == MessageType::CLIENT_RESPONSE)
-        {
-            handle_request_response(std::move(message));
-        }
-        else if (message_handler_)
-        {
+        if (message_handler_)
             message_handler_(std::move(message));
-        }
     }
 
     bool NetworkManager::connect_to_peer(PeerInfo &peer)
@@ -619,31 +550,6 @@ namespace raft
         }
 
         return data;
-    }
-
-    uint32_t NetworkManager::generate_message_id()
-    {
-        return next_message_id_.fetch_add(1);
-    }
-
-    void NetworkManager::cleanup_expired_requests()
-    {
-        std::lock_guard<std::mutex> lock(requests_mutex_);
-        auto now = std::chrono::steady_clock::now();
-
-        auto it = pending_requests_.begin();
-        while (it != pending_requests_.end())
-        {
-            if (now > it->second->deadline)
-            {
-                it->second->promise.set_value(nullptr);
-                it = pending_requests_.erase(it);
-            }
-            else
-            {
-                ++it;
-            }
-        }
     }
 
     int NetworkManager::create_server_socket()

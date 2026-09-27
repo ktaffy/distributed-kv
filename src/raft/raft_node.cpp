@@ -376,18 +376,6 @@ namespace raft
         apply_committed_entries();
     }
 
-    size_t RaftNode::get_log_size() const
-    {
-        return log_storage_->get_entry_count();
-    }
-
-    const LogEntry &RaftNode::get_log_entry(size_t index) const
-    {
-        static LogEntry empty_entry;
-        LogEntry entry = log_storage_->get_entry(static_cast<uint32_t>(index));
-        return entry.index != 0 ? entry : empty_entry;
-    }
-
     void RaftNode::become_follower(int term)
     {
         logger_->info("Node {} becoming FOLLOWER for term {}", node_id_, term);

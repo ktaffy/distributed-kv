@@ -44,7 +44,7 @@ trap cleanup EXIT INT TERM
 check_prerequisites() {
     if [ ! -f "$BINARY_PATH" ]; then
         echo -e "${RED}Error: Binary not found at $BINARY_PATH${NC}"
-        echo -e "${YELLOW}Please run: ./scripts/build.sh${NC}"
+        echo -e "${YELLOW}Please run: make build${NC}"
         exit 1
     fi
     
